@@ -19,6 +19,8 @@
 -define(DISPATCH_SINGLE_SERVER, "single_server").
 -define(DISPATCH_SERVER_PER_SCHEDULER, "server_per_scheduler").
 
+-define(IOQ2_SEARCH_SERVER, ioq_server_search).
+
 %% Config Categories
 -define(SHARD_CLASS_SEPARATOR, "||").
 -define(IOQ2_CONFIG, "ioq2").

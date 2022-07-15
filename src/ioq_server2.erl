@@ -25,6 +25,7 @@
 -export([
     start_link/3,
     call/3,
+    call_search/3,
     pcall/1,
     pcall/2
 ]).
@@ -93,6 +94,15 @@
 
 -spec call(pid(), term(), io_dimensions()) -> term().
 call(Fd, Msg, Dimensions) ->
+    call_int(Fd, Msg, Dimensions, normal).
+
+
+-spec call_search(pid(), term(), io_dimensions()) -> term().
+call_search(Fd, Msg, Dimensions) ->
+    call_int(Fd, Msg, Dimensions, search).
+
+
+call_int(Fd, Msg, Dimensions, IOType) ->
     Req0 = #ioq_request{
         fd = Fd,
         msg = Msg,
@@ -108,23 +118,29 @@ call(Fd, Msg, Dimensions) ->
                 [couchdb, io_queue2, RW, bypassed_count]),
             gen_server:call(Fd, Msg, infinity);
         _ ->
-            DispatchStrategy = config:get(
-                "ioq2", "dispatch_strategy", ?DISPATCH_SERVER_PER_SCHEDULER),
-            Server = case DispatchStrategy of
-                ?DISPATCH_RANDOM ->
-                    SID = rand:uniform(erlang:system_info(schedulers)),
-                    ?SERVER_ID(SID);
-                ?DISPATCH_FD_HASH ->
-                    NumSchedulers = erlang:system_info(schedulers),
-                    SID = 1 + (erlang:phash2(Fd) rem NumSchedulers),
-                    ?SERVER_ID(SID);
-                ?DISPATCH_SINGLE_SERVER ->
-                    ?SERVER_ID(1);
-                _ ->
-                    SID = erlang:system_info(scheduler_id),
-                    ?SERVER_ID(SID)
-            end,
+            Server = ioq_server(Req, IOType),
             gen_server:call(Server, Req, infinity)
+    end.
+
+
+ioq_server(#ioq_request{}, search) ->
+    ?IOQ2_SEARCH_SERVER;
+ioq_server(#ioq_request{fd=Fd}, _) ->
+    DispatchStrategy = config:get(
+        "ioq2", "dispatch_strategy", ?DISPATCH_SERVER_PER_SCHEDULER),
+    Server = case DispatchStrategy of
+        ?DISPATCH_RANDOM ->
+            SID = rand:uniform(erlang:system_info(schedulers)),
+            ?SERVER_ID(SID);
+        ?DISPATCH_FD_HASH ->
+            NumSchedulers = erlang:system_info(schedulers),
+            SID = 1 + (erlang:phash2(Fd) rem NumSchedulers),
+            ?SERVER_ID(SID);
+        ?DISPATCH_SINGLE_SERVER ->
+            ?SERVER_ID(1);
+        _ ->
+            SID = erlang:system_info(scheduler_id),
+            ?SERVER_ID(SID)
     end.
 
 
@@ -234,6 +250,8 @@ get_concurrency() ->
 -spec set_concurrency(non_neg_integer()) -> non_neg_integer().
 set_concurrency(C) when is_integer(C), C > 0 ->
     lists:foldl(
+        fun(?IOQ2_SEARCH_SERVER, Total) ->
+            Total;
         fun(Pid, Total) ->
             {ok, Old} = gen_server:call(Pid, {set_concurrency, C}, 1000),
             Total + Old
@@ -368,17 +386,21 @@ code_change(_OldVsn, #state{}=State, _Extra) ->
 
 -spec update_config_int(state()) -> state().
 update_config_int(State) ->
-    Concurrency = config:get_integer("ioq2", "concurrency", ?DEFAULT_CONCURRENCY),
-    ResizeLimit = config:get_integer("ioq2", "resize_limit", ?DEFAULT_RESIZE_LIMIT),
-    DeDupe = config:get_boolean("ioq2", "dedupe", true),
+    Category = case State#state.scheduler_id of
+        search -> "ioq2.search";
+        _ -> "ioq2"
+    end,
+    Concurrency = config:get_integer(Category, "concurrency", ?DEFAULT_CONCURRENCY),
+    ResizeLimit = config:get_integer(Category, "resize_limit", ?DEFAULT_RESIZE_LIMIT),
+    DeDupe = config:get_boolean(Category, "dedupe", true),
 
     ScaleFactor = ioq_config:to_float(
-        config:get("ioq2", "scale_factor"),
+        config:get(Category, "scale_factor"),
         ?DEFAULT_SCALE_FACTOR
     ),
 
     MaxPriority = ioq_config:to_float(
-        config:get("ioq2", "max_priority"),
+        config:get(Category, "max_priority"),
         ?DEFAULT_MAX_PRIORITY
     ),
 
